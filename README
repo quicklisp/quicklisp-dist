@@ -1,0 +1,6 @@
+This software configures a "mock" into a Quicklisp dist and uploads it
+to Amazon S3.
+
+I typically run it on a separate machine from Quicklisp Controller.
+
+For questions or comments, please email <zach@quicklisp.org>.
