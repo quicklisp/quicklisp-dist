@@ -25,6 +25,8 @@
 
 (defvar *temp-alphabet* "abcdefghijklmnopqrstuvwxyz0123456890")
 
+(defvar *dist-bucket* "beta.quicklisp.org")
+
 (defun sync-mock ()
   (commando:with-posix-cwd (qmerge "dists")
     (commando:run "rm" "-rf" "mock")
@@ -240,7 +242,7 @@ from SOURCE to TARGET."
 (defgeneric reinitialize-urls (object))
 
 (defmethod reinitialize-urls ((dist merged-dist))
-  (let ((host "beta.quicklisp.org")
+  (let ((host *dist-bucket*)
         (name (name dist))
         (version (version dist)))
     (setf (system-index-url dist)
@@ -250,7 +252,12 @@ from SOURCE to TARGET."
     (setf (canonical-distinfo-url dist)
           (format nil "http://~A/dist/~A/~A/distinfo.txt" host name version))
     (setf (distinfo-subscription-url dist)
-          (format nil "http://~A/dist/~A.txt" host name))))
+          (format nil "http://~A/dist/~A.txt" host name))
+    (dolist (release (provided-releases dist))
+      (multiple-value-bind (bucket key)
+	  (s3-components (archive-url release))
+	(setf (archive-url release)
+	      (format nil "http://~A/~A" *dist-bucket* key))))))
 
 (defmethod (setf name) :after (new-name (dist merged-dist))
   (reinitialize-urls dist))
@@ -303,7 +310,8 @@ from SOURCE to TARGET."
 
 (defun upload-distinfo-files (dist base-directory)
   (flet ((url (file)
-           (format nil "http://beta.quicklisp.org/dist/~A/~A/~A"
+           (format nil "http://~A/dist/~A/~A/~A"
+		   *dist-bucket*
                    (name dist)
                    (version dist)
                    (file-namestring file))))
@@ -328,7 +336,7 @@ from SOURCE to TARGET."
   (flet ((key-version (string)
            (elt (split-spaces (substitute #\Space #\/ string))
                 2)))
-    (let ((keys (zs3:all-keys "beta.quicklisp.org"
+    (let ((keys (zs3:all-keys *dist-bucket*
                               :prefix (format nil "dist/~A/" dist-name))))
       (when (zerop (length keys))
         (error "No versions for ~A found!" dist-name))
@@ -338,7 +346,8 @@ from SOURCE to TARGET."
              (lambda (key)
                (when (search "distinfo.txt" (zs3:name key))
                  (let* ((name (zs3:name key))
-                        (url (format nil "http://beta.quicklisp.org/~A"
+                        (url (format nil "http://~A/~A"
+				     *dist-bucket*
                                      name))
                         (version (key-version name)))
                    (format stream "~A ~A~%" version url))))
@@ -442,3 +451,22 @@ from SOURCE to TARGET."
 	    (mapcar #'name (mapcar #'first updated)))
     (format t "Removed projects: ~{~A~^, ~}."
 	    (mapcar #'name removed))))
+
+
+(defun publish-alpha (&key keep)
+  (let ((update (merge-dists "quicklisp" "mock" :keep keep))
+	(*dist-bucket* "alpha.quicklisp.org")
+	(zs3:*credentials* (zs3:file-credentials "~/.qlalpha")))
+    (setf (name update) "qlalpha"
+	  (version update) (date-for-today))
+    (upload-new-releases update)
+    (write-indexes update "/tmp/qlalpha/")
+    (upload-distinfo-files update "/tmp/qlalpha/")
+    (put-to-s3-url "/tmp/qlalpha/distinfo.txt"
+		   "http://alpha.quicklisp.org/dist/qlalpha.txt"
+		   :overwrite t :content-type "text/plain")
+    (write-dist-versions-file "qlalpha"
+			      "/tmp/qlalpha/qlalpha-versions.txt")
+    (put-to-s3-url "/tmp/qlalpha/qlalpha-versions.txt"
+		   "http://alpha.quicklisp.org/dist/qlalpha-versions.txt"
+		   :overwrite t :content-type "text/plain")))
