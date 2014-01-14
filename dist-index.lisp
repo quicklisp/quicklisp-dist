@@ -286,18 +286,28 @@ from SOURCE to TARGET."
                       :content-type content-type
                       :content-disposition content-disposition)))))
 
-(defun upload-new-releases (dist)
+(defun upload-new-releases (dist &key overwrite)
   (dolist (release (provided-releases dist))
-    (force-output)
-    (let ((url (archive-url release)))
-      (multiple-value-bind (bucket key)
-          (s3-components url)
-        (if (s3-object-exists bucket key)
-            (format t "~A already there~%" release)
-            (progn
-              (format t "Uploading ~A~%" release)
-              (put-to-s3-url (local-archive-file release)
-                             (archive-url release))))))))
+    :retry
+    (with-simple-restart (retry "Retry")
+      (force-output)
+      (let ((url (archive-url release))
+	    (archive (local-archive-file release)))
+	(multiple-value-bind (bucket key)
+	    (s3-components url)
+	  (if (and (s3-object-exists bucket key) (not overwrite))
+	      (format t "~A already there~%" release)
+	      (progn
+		(when (probe-file archive)
+		  (format t "Uploading ~A~%"
+			  release)
+		  (put-to-s3-url (local-archive-file release)
+				     (archive-url release)
+				     :overwrite t))))))
+      (go :done))
+    (warn "Retrying")
+    (go :retry)
+    :done))
 
 (defun check-new-releases (dist)
   (dolist (release (provided-releases dist))
@@ -320,7 +330,7 @@ from SOURCE to TARGET."
       (let ((url (url file)))
         (multiple-value-bind (bucket key)
             (s3-components url)
-          (if (s3-object-exists bucket key)
+          (if (and (s3-object-exists bucket key) (not overwrite))
               (format t "~A already exists~%" url)
               (progn
                 (format t "Uploading ~A~%" url)
@@ -366,7 +376,7 @@ from SOURCE to TARGET."
 
 (defun date-for-today ()
   (multiple-value-bind (second minute hour date month year)
-      (get-decoded-time)
+      (decode-universal-time (get-universal-time) 0)
     (declare (ignore second minute hour))
     (format nil "~4,'0D-~2,'0D-~2,'0D"
             year month date)))
