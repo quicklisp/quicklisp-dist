@@ -6,4 +6,5 @@
                #:quicklisp
                #:release-report
                #:commando)
-  :components ((:file "dist-index")))
+  :components ((:file "dist-index")
+               (:file "update-report")))
