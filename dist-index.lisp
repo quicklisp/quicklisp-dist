@@ -32,19 +32,20 @@
     (commando:run "rm" "-rf" "mock")
     (commando:run "rsync" "-av" "darkhorse:quicklisp/dists/mock/" "mock")))
 
-(defgeneric write-index-entry (object stream)
+(defgeneric write-index-entry (object destination)
   (:documentation
-   "Write an index entry for OBJECT to STREAM."))
+   "Write an index entry for OBJECT to DESTINATION.
+The DESTINATION meaning and the function return value as per CL:FORMAT."))
 
-(defmethod write-index-entry ((system system) stream)
-  (format stream "~A ~A ~A~{ ~A~}~%"
+(defmethod write-index-entry ((system system) destination)
+  (format destination "~A ~A ~A~{ ~A~}~%"
           (name (release system))
           (system-file-name system)
           (name system)
           (required-systems system)))
 
-(defmethod write-index-entry ((release release) stream)
-  (format stream "~A ~A ~D ~A ~A ~A~{ ~A~}~%"
+(defmethod write-index-entry ((release release) destination)
+  (format destination "~A ~A ~D ~A ~A ~A~{ ~A~}~%"
           (name release)
           (archive-url release)
           (archive-size release)
@@ -80,12 +81,13 @@
                             :if-exists :rename-and-delete)
       (write-distinfo dist stream))
     (flet ((write-index-file (file list header)
-             (setf list (sort list #'string< :key #'project-name))
              (with-open-file (stream file :direction :output
                                      :if-exists :rename-and-delete)
                (write-line header stream)
-               (dolist (object list)
-                 (write-index-entry object stream)))))
+               (dolist (line (sort (mapcar (lambda (obj) (write-index-entry obj nil))
+                                           list)
+                                   #'string<))
+                 (write-string line stream)))))
       (write-index-file system-index (provided-systems dist)
                         "# project system-file system-name [dependency1..dependencyN]")
       (write-index-file release-index (provided-releases dist)
