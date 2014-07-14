@@ -408,12 +408,16 @@ from SOURCE to TARGET."
          (delete-directory-tree ,path)))))
 
 
-(defun call-for-last-two-dists (dist-name fun)
+(defun call-for-last-two-dists (dist-name fun &key skip)
   (let* ((versions (available-versions (dist dist-name)))
          (old-path #p"old/")
          (new-path #p"new/")
          (new-distinfo #p "new/distinfo.txt")
          (old-distinfo #p "old/distinfo.txt"))
+    (when skip
+      ;; This is necessary when I screw up and make two releases
+      ;; between announcements.
+      (setf (cdr versions) (nthcdr skip (cdr versions))))
     (destructuring-bind ((new-version . new-url)
                          (old-version . old-url))
         (subseq versions 0 2)
