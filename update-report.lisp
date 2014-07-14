@@ -35,7 +35,8 @@
                    (list :extra extra))))))))
 
 (defparameter *guess-website-patterns*
-  '(("//github.com/(.*)\\.git" "https://github.com/" 0 "/")))
+  '(("//github.com/(.*)\\.git" "https://github.com/" 0 "/")
+    ("//mr.gy/(.*?)/(.*?)/" "http://mr.gy/" 0 "/" 1 "/")))
 
 (defun substitute-if-matches (regex target substitution)
   (multiple-value-bind (start end anchor-starts anchor-ends)
