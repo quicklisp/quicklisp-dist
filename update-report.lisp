@@ -233,3 +233,8 @@
 	    (mapcar #'name (mapcar #'first updated)))
     (format t "<p>Removed projects: ~{~A~^, ~}."
 	    (mapcar #'name removed))))
+
+(defun dist-update-report (dist-name &key skip)
+  (ql-dist::call-for-last-two-dists dist-name
+                                    'update-report*
+                                    :skip skip))
