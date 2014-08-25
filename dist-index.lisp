@@ -92,7 +92,23 @@
                         "# project url size file-md5 content-sha1 prefix [system-file1..system-fileN]"))))
 
 (defclass merged-dist (dist)
-  ())
+  ((source-dist
+    :initarg :source-dist
+    :accessor source-dist)))
+
+(defclass merged-release (release) ())
+
+(defmethod local-archive-file ((release merged-release))
+  (let ((default (call-next-method)))
+    (or (probe-file default)
+	(let* ((source (source-dist (dist release)))
+	       (original-release (find-release-in-dist (name release) source)))
+	  (unless original-release
+	    (error "No orignal release for ~A" release))
+	  (let ((original-file (probe-file (local-archive-file original-release))))
+	    (unless original-file
+	      (error "No original file for ~A" original-release))
+	    original-file)))))
 
 (defgeneric copy-instance (object &rest initargs))
 
@@ -130,7 +146,9 @@
     copy))
 
 (defmethod find-system-in-dist (name (dist merged-dist))
-  (error "Not supported"))
+  (dolist (release (provided-releases dist))
+    (when (equalp name (name release))
+      (return release))))
 
 (defgeneric (setf find-release-in-dist) (new-release name dist))
 
@@ -179,6 +197,9 @@
 (defun release-equal (r1 r2)
   (and (equalp (ordered-provided-systems r1)
                (ordered-provided-systems r2))
+       #+nil
+       (= (archive-size r1)
+	  (archive-size r2))
        (or (equalp (archive-md5 r1)
                    (archive-md5 r2))
            (equalp (archive-content-sha1 r1)
@@ -191,6 +212,8 @@
         (m2 (archive-md5 r2))
         (s1 (archive-content-sha1 r1))
         (s2 (archive-content-sha1 r2))
+	(size1 (archive-size r1))
+	(size2 (archive-size r2))
         (name (project-name r1))
         (v1 nil)
         (v2 nil)
@@ -203,11 +226,13 @@
            (setf v1 m1 v2 m2 field "MD5"))
           ((string/= s1 s2)
            (setf v1 s1 v2 s2 field "SHA1"))
+	  ((/= size1 size2)
+	   (setf v1 size1 v2 size2 field "file sizes"))
           (t (error "Releases don't differ!")))
-    (when (equalp p1 p2)
-      (error "Prefixes (~A) match!" p1))
     (format t "~S (~A -> ~A) differs in ~A: ~%    ~S~% vs ~S~%" name
-	    p1 p2 field v1 v2)))
+	    p1 p2 field v1 v2)
+    (when (equalp p1 p2)
+      (warn "Prefixes (~A) match!" p1))))
 
 (defmethod merge-dists ((source string) (target string) &key keep)
   (merge-dists (make-merged-dist source)
@@ -219,6 +244,7 @@
 SOURCE release. TARGET should be the new release and SOURCE should be
 the old stuff. Project names in the KEEP list are copied unchanged
 from SOURCE to TARGET."
+  (setf (source-dist target) source)
   (dolist (old-release (provided-releases source))
     (let* ((name (project-name old-release))
            (kept (member name keep :test 'string-equal))
@@ -253,11 +279,11 @@ from SOURCE to TARGET."
           (format nil "http://~A/dist/~A/~A/distinfo.txt" host name version))
     (setf (distinfo-subscription-url dist)
           (format nil "http://~A/dist/~A.txt" host name))
-    (dolist (release (provided-releases dist))
+    (dolist (release (provided-releases dist) (clrhash (release-index dist)))
       (multiple-value-bind (bucket key)
 	  (s3-components (archive-url release))
 	(setf (archive-url release)
-	      (format nil "http://~A/~A" *dist-bucket* key))))))
+		     (format nil "http://~A/~A" *dist-bucket* key))))))
 
 (defmethod (setf name) :after (new-name (dist merged-dist))
   (reinitialize-urls dist))
@@ -274,6 +300,11 @@ from SOURCE to TARGET."
   (let ((http-status (nth-value 1 (zs3:head :bucket bucket :key key))))
     (<= 200 http-status 299)))
 
+(defun s3-url-exists (url)
+  (multiple-value-bind (bucket key)
+      (s3-components url)
+    (s3-object-exists bucket key)))
+
 (defun put-to-s3-url (file url &key overwrite
                       (content-type "binary/octet-stream")
                       content-disposition)
@@ -286,8 +317,17 @@ from SOURCE to TARGET."
                       :content-type content-type
                       :content-disposition content-disposition)))))
 
+(defun check-archive-size (release)
+  (let ((archive (local-archive-file release)))
+    (when (probe-file archive)
+      (when (/= (archive-size release)
+		(file-size archive))
+	(error "Size mismatch on ~A" (name release))))))
+
 (defun upload-new-releases (dist &key overwrite)
   (dolist (release (provided-releases dist))
+    (unless (typep release 'merged-release)
+      (change-class release 'merged-release))
     :retry
     (with-simple-restart (retry "Retry")
       (force-output)
@@ -299,6 +339,9 @@ from SOURCE to TARGET."
 	      (format t "~A already there~%" release)
 	      (progn
 		(when (probe-file archive)
+		  (when (/= (archive-size release)
+			    (file-size archive))
+		    (error "Size mismatch on ~A" (name release)))
 		  (format t "Uploading ~A~%"
 			  release)
 		  (put-to-s3-url (local-archive-file release)
@@ -318,7 +361,7 @@ from SOURCE to TARGET."
         (unless (s3-object-exists bucket key)
           (warn "~A missing" release))))))
 
-(defun upload-distinfo-files (dist base-directory)
+(defun upload-distinfo-files (dist base-directory &key overwrite)
   (flet ((url (file)
            (format nil "http://~A/dist/~A/~A/~A"
 		   *dist-bucket*
@@ -354,7 +397,7 @@ from SOURCE to TARGET."
                               :if-exists :rename-and-delete)
         (map nil
              (lambda (key)
-               (when (search "distinfo.txt" (zs3:name key))
+               (when (ppcre:scan "distinfo\\.txt$" (zs3:name key))
                  (let* ((name (zs3:name key))
                         (url (format nil "http://~A/~A"
 				     *dist-bucket*
@@ -466,21 +509,56 @@ from SOURCE to TARGET."
     (format t "Removed projects: ~{~A~^, ~}."
 	    (mapcar #'name removed))))
 
-
-(defun publish-alpha (&key keep)
-  (let ((update (merge-dists "quicklisp" "mock" :keep keep))
-	(*dist-bucket* "alpha.quicklisp.org")
-	(zs3:*credentials* (zs3:file-credentials "~/.qlalpha")))
+(defun make-alpha-update (&key keep (dist "mock"))
+  (let ((update (merge-dists "quicklisp" dist :keep keep)))
     (setf (name update) "qlalpha"
 	  (version update) (date-for-today))
-    (upload-new-releases update)
-    (write-indexes update "/tmp/qlalpha/")
-    (upload-distinfo-files update "/tmp/qlalpha/")
-    (put-to-s3-url "/tmp/qlalpha/distinfo.txt"
-		   "http://alpha.quicklisp.org/dist/qlalpha.txt"
-		   :overwrite t :content-type "text/plain")
-    (write-dist-versions-file "qlalpha"
-			      "/tmp/qlalpha/qlalpha-versions.txt")
-    (put-to-s3-url "/tmp/qlalpha/qlalpha-versions.txt"
-		   "http://alpha.quicklisp.org/dist/qlalpha-versions.txt"
-		   :overwrite t :content-type "text/plain")))
+    update))
+
+(defun call-with-retrying (fun)
+  (handler-bind
+      ((error (lambda (condition)
+		(when (find-restart 'retry condition)
+		  (warn "Retrying after condition: ~A" condition)
+		  (invoke-restart 'retry)))))
+    (funcall fun)))
+
+(defmacro with-retrying (&body body)
+  `(call-with-retrying (lambda () ,@body)))
+
+(defun s3-url-exists (url)
+  (multiple-value-bind (bucket key)
+      (s3-components url)
+    (s3-object-exists bucket key)))
+
+(defun sanity-check-dist-uploads (dist)
+  (let ((releases (provided-releases dist)))
+    (dolist (release releases)
+      (unless (s3-url-exists (archive-url release))
+	(warn "No archive file found for ~A" (name release))))))
+
+(defun publish-alpha (&key keep (dist "mock"))
+  (let* ((*dist-bucket* "alpha.quicklisp.org")
+	 (update (make-alpha-update :keep keep :dist dist))
+	 (zs3:*credentials* (zs3:file-credentials "~/.qlalpha")))
+    (with-retrying
+      (upload-new-releases update :overwrite nil)
+      (write-indexes update "/tmp/qlalpha/")
+      (upload-distinfo-files update "/tmp/qlalpha/")
+      (put-to-s3-url "/tmp/qlalpha/distinfo.txt"
+		     "http://alpha.quicklisp.org/dist/qlalpha.txt"
+		     :overwrite t :content-type "text/plain")
+      (write-dist-versions-file "qlalpha"
+				"/tmp/qlalpha/qlalpha-versions.txt")
+      (put-to-s3-url "/tmp/qlalpha/qlalpha-versions.txt"
+		     "http://alpha.quicklisp.org/dist/qlalpha-versions.txt"
+		     :overwrite t :content-type "text/plain"))
+    update))
+
+(defun alpha-problems (dist)
+  (dolist (release (provided-releases dist))
+    (let ((s3-url-exists-p (s3-url-exists (archive-url release)))
+	  (file-exists-p (probe-file (local-archive-file release))))
+      (when (and (not s3-url-exists-p)
+		 (not file-exists-p))
+	(print release)))))
