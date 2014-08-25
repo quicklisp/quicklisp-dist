@@ -5,6 +5,7 @@
   :depends-on (#:zs3
                #:quicklisp
                #:release-report
-               #:commando)
+               #:commando
+               #:yason)
   :components ((:file "dist-index")
                (:file "update-report")))
