@@ -300,6 +300,7 @@ from SOURCE to TARGET."
   (let ((http-status (nth-value 1 (zs3:head :bucket bucket :key key))))
     (<= 200 http-status 299)))
 
+#+nil
 (defun s3-url-exists (url)
   (multiple-value-bind (bucket key)
       (s3-components url)
@@ -485,8 +486,7 @@ from SOURCE to TARGET."
             (write-line (name system) stream))))))
 
 (defun update-report (dist-name)
-  (let* ((dist (find-dist "mock"))
-         (descriptions (relative-to dist "descriptions.cdb")))
+  (let* ((descriptions "descriptions.cdb")) ; Not used
     (multiple-value-bind (new updated removed)
         (call-for-last-two-dists dist-name #'update-release-differences)
       (if (probe-file descriptions)

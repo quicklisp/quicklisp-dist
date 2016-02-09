@@ -2,6 +2,7 @@
 
 (defpackage #:update-report
   (:use #:cl)
+  (:export #:dist-update-report)
   (:shadowing-import-from
    #:ql-dist
    #:name
@@ -18,7 +19,7 @@
 (defun project-source-file (project)
   (let ((file
          (merge-pathnames (make-pathname :directory
-                                         (list :relative project)
+                                         (list :relative "projects" project)
                                          :name "source"
                                          :type "txt")
                           *project-base*)))
@@ -36,7 +37,19 @@
 
 (defparameter *guess-website-patterns*
   '(("//github.com/(.*)\\.git" "https://github.com/" 0 "/")
-    ("//mr.gy/(.*?)/(.*?)/" "http://mr.gy/" 0 "/" 1 "/")))
+    ("//mr.gy/(.*?)/(.*?)/" "http://mr.gy/" 0 "/" 1 "/")
+    ("(http://(.*?).googlecode.com/)" 0)
+    ("//common-lisp.net/projects/(.*?)/" "http://common-lisp.net/projects/" 0)
+    ("https://www.lrde.epita.fr/~didier/software/lisp/"
+     "https://www.lrde.epita.fr/~didier/software/lisp/")
+    ("http://git.code.sf.net/p/(.*?)/code"
+     "http://" 0 ".sourceforge.net")
+    ("mini-cas" "http://git.tentpost.com/?p=lisp/mini-cas.git;a=summary")
+    ("^(.*bitbucket.*)$" 0)
+    ("(http://wcp.sdf-eu.org/software/)" 0)
+    ("(http://people.csail.mit.edu/devon/lisp/)" 0)
+    ("^(http://dwim.hu/live/.*)$" 0)
+    ("^.*(repo.or.cz)/(.*?\\.git)$" "http://" 0 "/w/" 1)))
 
 (defun substitute-if-matches (regex target substitution)
   (multiple-value-bind (start end anchor-starts anchor-ends)
@@ -81,23 +94,53 @@
         :author (getf defsystem :author)
         :version (getf defsystem :version)))
 
+(defun read-sharpdot-expression (stream character argument)
+  (declare (ignore character argument))
+  (let ((form (read stream)))
+    (prin1-to-string form)))
+
+(defun make-sharpdot-readtable ()
+  (let ((readtable (copy-readtable nil)))
+    (set-dispatch-macro-character #\# #\.
+                                  #'read-sharpdot-expression
+                                  readtable)
+    readtable))
+
+(defparameter *sharpdot-readtable* (make-sharpdot-readtable))
+
 (defun system-file-info (system-file)
   "Read SYSTEM-FILE and look for a DEFSYSTEM form matching its
   pathname-name. Return the interesting properties of the
   form (license, description, perhaps more) as a plist."
   (with-open-file (stream system-file)
     (let* ((*load-truename* (truename system-file))
-           (*load-pathname* *load-truename*))
-      (loop with file-name = (pathname-name system-file)
-            for form = (read stream nil stream)
-            until (eq form stream)
-            when (and (consp form)
-                      (string-equal (first form) "DEFSYSTEM")
-                      (string-equal (second form) file-name))
-            return (defsystem-form-info form)))))
+           (*load-pathname* *load-truename*)
+           (*read-eval* nil)
+           (*readtable* *sharpdot-readtable*)
+           (*default-pathname-defaults*
+            (make-pathname :name nil :type nil :version nil
+                           :defaults *load-truename*))
+           (cffi-grovel-p (find-package '#:cffi-grovel)))
+      (unless cffi-grovel-p
+        (let ((package (make-package '#:cffi-grovel)))
+          (let ((symbol (intern "GROVEL-FILE" package)))
+            (export symbol package))))
+      (unwind-protect
+           (handler-case
+               (loop with file-name = (pathname-name system-file)
+                     for form = (read stream nil stream)
+                     until (eq form stream)
+                     when (and (consp form)
+                               (string-equal (first form) "DEFSYSTEM")
+                               (string-equal (second form) file-name))
+                     return (defsystem-form-info form))
+             (sb-int:simple-reader-error () nil))
+        (unless cffi-grovel-p
+          (delete-package '#:cffi-grovel))))))
 
 (defun test-system-p (pathname)
-  (search "-test" (namestring pathname)))
+  (and (not (equal "should-test" (pathname-name pathname)))
+       (search "-test" (namestring pathname))))
 
 (defun project-system-files (project)
   (let ((release (find-release project)))
@@ -150,7 +193,8 @@
       (flatten-string description))))
 
 (defun primary-system-license (project)
-  (primary-system-property project :license))
+  (or (primary-system-property project :license)
+      (primary-system-property project :licence)))
 
 (defun project-website (project)
   (or (primary-system-website project)
@@ -224,17 +268,27 @@
     (write-string (new-releases-html projects) stream))
   (probe-file file))
 
+(defun updated-release-html (names)
+  (flet ((link (name)
+           (format nil "<a href='http://quickdocs.org/~A/'>~A</a>" name name)))
+    (mapcar #'link names)))
+
 (defun update-report* (old-dist new-dist)
   (multiple-value-bind (new updated removed)
       (ql-dist:update-release-differences old-dist new-dist)
     (format t "<p>New projects: ~A~%~%"
 	    (new-releases-html (mapcar #'name new)))
     (format t "<p>Updated projects: ~{~A~^, ~}.~%~%"
-	    (mapcar #'name (mapcar #'first updated)))
+	    (updated-release-html (mapcar #'name (mapcar #'first updated))))
     (format t "<p>Removed projects: ~{~A~^, ~}."
 	    (mapcar #'name removed))))
 
 (defun dist-update-report (dist-name &key skip)
+  (ql:update-dist dist-name :prompt nil)
+  (map nil 'ql-dist:ensure-installed
+       (ql-dist:provided-systems (ql-dist:dist dist-name)))
+  (commando:with-posix-cwd "~/src/quicklisp-projects"
+    (commando:run "git" "pull"))
   (ql-dist::call-for-last-two-dists dist-name
                                     'update-report*
                                     :skip skip))
