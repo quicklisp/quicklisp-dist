@@ -37,6 +37,7 @@
 
 (defparameter *guess-website-patterns*
   '(("//github.com/(.*)\\.git" "https://github.com/" 0 "/")
+    ("(https://gitlab.common-lisp.net/.*)\.git$")
     ("//mr.gy/(.*?)/(.*?)/" "http://mr.gy/" 0 "/" 1 "/")
     ("(http://(.*?).googlecode.com/)" 0)
     ("//common-lisp.net/projects/(.*?)/" "http://common-lisp.net/projects/" 0)
