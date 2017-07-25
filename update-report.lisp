@@ -38,6 +38,7 @@
 (defparameter *guess-website-patterns*
   '(("//github.com/(.*)\\.git" "https://github.com/" 0 "/")
     ("(https://gitlab.common-lisp.net/.*)\.git$")
+    ("(https://gitlab.com/.*)\.git$")
     ("//mr.gy/(.*?)/(.*?)/" "http://mr.gy/" 0 "/" 1 "/")
     ("(http://(.*?).googlecode.com/)" 0)
     ("//common-lisp.net/projects/(.*?)/" "http://common-lisp.net/projects/" 0)
@@ -50,6 +51,8 @@
     ("(http://wcp.sdf-eu.org/software/)" 0)
     ("(http://people.csail.mit.edu/devon/lisp/)" 0)
     ("^(http://dwim.hu/live/.*)$" 0)
+    ("^http://git.axity.net/axion/AGM.git$" "agm")
+    ("^http://nst.maraist.org/download/(.*?)-latest.tar.gz$" 0)
     ("^.*(repo.or.cz)/(.*?\\.git)$" "http://" 0 "/w/" 1)))
 
 (defun substitute-if-matches (regex target substitution)
@@ -135,7 +138,9 @@
                                (string-equal (first form) "DEFSYSTEM")
                                (string-equal (second form) file-name))
                      return (defsystem-form-info form))
-             (sb-int:simple-reader-error () nil))
+             (sb-int:simple-reader-error (c)
+               (warn "reader error ~A" c)
+               (values nil c)))
         (unless cffi-grovel-p
           (delete-package '#:cffi-grovel))))))
 
@@ -143,12 +148,32 @@
   (and (not (equal "should-test" (pathname-name pathname)))
        (search "-test" (namestring pathname))))
 
+(defun shortest-by-namestring (pathnames)
+  (first (sort (copy-seq pathnames) #'<
+               :key (lambda (pathname) (length (namestring pathname))))))
+
+(defun strip-prefix (prefix string)
+  (if (eql 0 (search prefix string :end2 (length prefix)))
+      (subseq string (length prefix))
+      string))
+
+(defun normalize-for-comparison (name)
+  (strip-prefix "cl-" name))
+
+(defun applicable-system-name (project name)
+  "Return true if NAME is applicable to PROJECT. Works by normalizing
+  each before checking anything."
+  (search (normalize-for-comparison project)
+          (normalize-for-comparison name)))
+
 (defun project-system-files (project)
   (let ((release (find-release project)))
     (unless release (error "Could not find a release for ~A" project))
     (ensure-installed release)
     (loop for file in (system-files release)
-          unless (test-system-p file)
+          unless (or (test-system-p file)
+                     (not (applicable-system-name project
+                                                  (pathname-name file))))
           collect (truename (relative-to release file)))))
 
 (defun primary-system-file (project)
@@ -159,7 +184,7 @@
                  :test 'string-equal
                  :key 'pathname-name))
           (t
-           nil))))
+           (shortest-by-namestring system-files)))))
 
 (defvar *test-new-releases*
   '("chirp" "cl-flowd" "defvariant" "delta-debug" "random"))
