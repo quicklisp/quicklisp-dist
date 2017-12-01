@@ -37,8 +37,8 @@
 
 (defparameter *guess-website-patterns*
   '(("//github.com/(.*)\\.git" "https://github.com/" 0 "/")
-    ("(https://gitlab.common-lisp.net/.*)\.git$")
-    ("(https://gitlab.com/.*)\.git$")
+    ("(https://gitlab.common-lisp.net/.*)\.git$" 0)
+    ("(https://gitlab.com/.*)\.git$" 0)
     ("//mr.gy/(.*?)/(.*?)/" "http://mr.gy/" 0 "/" 1 "/")
     ("(http://(.*?).googlecode.com/)" 0)
     ("//common-lisp.net/projects/(.*?)/" "http://common-lisp.net/projects/" 0)
@@ -76,7 +76,7 @@
       (let ((substitution (substitute-if-matches regex
                                                  location
                                                  substitution)))
-        (when substitution
+        (when (and substitution (not (equal substitution "")))
           (return substitution))))))
 
 (defun guess-website (project)
@@ -225,7 +225,8 @@
 (defun project-website (project)
   (or (primary-system-website project)
       (guess-website project)
-      (cliki-link project)))
+      (cliki-link project)
+      (error "Can't determine project website for ~S" project)))
 
 (defun github-properties (url)
   (ppcre:register-groups-bind (user repo)
